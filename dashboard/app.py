@@ -22,6 +22,24 @@ import datetime
 
 import streamlit as st
 
+# Streamlit Cloud secrets (st.secrets) are NOT automatically available
+# as os.environ variables to the rest of the codebase. Since all our
+# other modules (gee_ingest, gemini_advisory, telegram_delivery) read
+# from os.environ / .env for local-dev consistency, we explicitly copy
+# every secret into os.environ here, once, at startup. This makes the
+# same code work identically whether run locally (.env file) or on
+# Streamlit Cloud (secrets manager) - no auth-path-specific code needed
+# elsewhere.
+for _key in [
+    "GEE_PROJECT_ID", "GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "GEE_SERVICE_ACCOUNT_EMAIL", "GEE_SERVICE_ACCOUNT_KEY",
+]:
+    try:
+        if _key in st.secrets:
+            os.environ[_key] = str(st.secrets[_key])
+    except Exception:
+        pass  # no secrets.toml present (e.g. local run using .env instead) - fine
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ingestion"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "scoring"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "advisory"))
