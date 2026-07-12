@@ -5,5 +5,12 @@
     "lon": 78.78,
     "score": 100.0,
     "warning_level": "HIGH"
+  },
+  {
+    "timestamp": "2026-07-12T04:02:16.594162",
+    "lat": 30.15,
+    "lon": 78.78,
+    "score": 100.0,
+    "warning_level": "NONE"
   }
 ]

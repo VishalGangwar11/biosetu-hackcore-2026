@@ -35,6 +35,17 @@ LON = 78.78
 PROJECT_ID = "htip-bah2026"  # your GEE project ID
 LANGUAGE = "Hindi"
 
+# Optional: which biological product class the farmer plans to apply.
+# Set to None to get only the generic readiness score (original behavior).
+# Valid options: "trichoderma", "bacillus", "rhizobium", "azotobacter",
+# "azospirillum", "pseudomonas", "mycorrhizae", "seaweed_extract",
+# "humic_fulvic", "protein_hydrolysate"
+BIOLOGICAL_CLASS = "trichoderma"
+
+# Optional: days since the field's last chemical pesticide application.
+# Set to None if unknown.
+DAYS_SINCE_LAST_CHEMICAL = None
+
 
 def run():
     print(f"Fetching live satellite data for ({LAT}, {LON})...")
@@ -46,7 +57,15 @@ def run():
     print("Weather snapshot:", weather_snapshot)
 
     print("\nBuilding field report...")
-    report = build_field_report(satellite_snapshot, weather_snapshot)
+    report = build_field_report(
+        satellite_snapshot, weather_snapshot,
+        biological_class=BIOLOGICAL_CLASS,
+        days_since_last_chemical_application=DAYS_SINCE_LAST_CHEMICAL,
+    )
+
+    if report.get("biological_guidance"):
+        print("\nBiological-class guidance:")
+        print(json.dumps(report["biological_guidance"], indent=2))
 
     print("\nGenerating farmer advisory message...")
     advisory = generate_advisory(report, language=LANGUAGE)

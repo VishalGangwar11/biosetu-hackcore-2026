@@ -35,13 +35,24 @@ def get_gemini_client(api_key: str = None):
 def build_prompt(field_report: dict, language: str = "Hindi"):
     readiness = field_report["readiness"]
     warning = field_report["early_warning"]
+    bio_guidance = field_report.get("biological_guidance")
+
+    bio_section = ""
+    if bio_guidance:
+        compat = bio_guidance["compatibility"]
+        bio_section = f"""
+- Product type farmer plans to apply: {bio_guidance['label']}
+- Viability/effectiveness score for THIS specific product type at current temperature: {bio_guidance['viability_score']}/100
+- Chemical compatibility check: {compat['reason']}
+- Timing guidance: {bio_guidance['timing_guidance'] or 'No special timing requirement.'}
+"""
 
     prompt = f"""You are an agricultural advisory assistant writing a short SMS-style
 message for an Indian smallholder farmer. Translate and phrase your
 entire response in {language}, using simple words a farmer with no
-technical background would understand. No jargon. Maximum 3 short
-sentences. Do not invent specific product names — speak only about
-general conditions and timing.
+technical background would understand. No jargon. Maximum 4 short
+sentences. Do not invent specific brand/product names — speak only
+about the general product type and conditions provided.
 
 Data:
 - Biological application readiness score: {readiness['score']} out of 100
@@ -50,8 +61,11 @@ Data:
 - Climate stress warning level: {warning['level']}
 - Reason for warning: {warning['reason']}
 - Rain risk flag (would wash away application): {readiness['rain_risk_flag']}
-
-Write the farmer message now, in {language} only, no English, no preamble."""
+{bio_section}
+Write the farmer message now, in {language} only, no English, no preamble.
+If a product-specific viability score and timing guidance are given above,
+mention them specifically (e.g. mention if this particular product type
+needs morning/evening application, or if current heat is a problem for it)."""
 
     return prompt
 

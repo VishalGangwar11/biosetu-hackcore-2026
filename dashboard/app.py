@@ -70,6 +70,33 @@ lat = st.sidebar.number_input("Latitude", value=30.15, format="%.4f")
 lon = st.sidebar.number_input("Longitude", value=78.78, format="%.4f")
 project_id = st.sidebar.text_input("GEE Project ID", value=os.environ.get("GEE_PROJECT_ID", ""))
 language = st.sidebar.selectbox("Advisory language", ["Hindi", "English", "Marathi", "Tamil", "Telugu"])
+
+st.sidebar.divider()
+st.sidebar.subheader("Biological Product Details")
+bio_class_options = {
+    "None (generic score only)": None,
+    "Trichoderma (fungal biocontrol)": "trichoderma",
+    "Bacillus (bacterial/endospore)": "bacillus",
+    "Rhizobium / Bradyrhizobium": "rhizobium",
+    "Azotobacter": "azotobacter",
+    "Azospirillum": "azospirillum",
+    "Pseudomonas fluorescens": "pseudomonas",
+    "Mycorrhizae (AMF)": "mycorrhizae",
+    "Seaweed extract": "seaweed_extract",
+    "Humic/Fulvic acid": "humic_fulvic",
+    "Protein hydrolysate": "protein_hydrolysate",
+}
+bio_class_label = st.sidebar.selectbox("Biological product type", list(bio_class_options.keys()))
+biological_class = bio_class_options[bio_class_label]
+
+days_since_chemical = None
+if biological_class is not None:
+    chemical_known = st.sidebar.checkbox("I know when a chemical pesticide was last applied here")
+    if chemical_known:
+        days_since_chemical = st.sidebar.number_input(
+            "Days since last chemical pesticide application", min_value=0, value=10, step=1
+        )
+
 send_telegram = st.sidebar.checkbox("Also send to Telegram", value=False)
 
 run_button = st.sidebar.button("🔄 Fetch Live Field Report", type="primary")
@@ -111,7 +138,11 @@ if run_button:
             weather_snapshot = None
 
     if satellite_snapshot is not None:
-        report = build_field_report(satellite_snapshot, weather_snapshot)
+        report = build_field_report(
+            satellite_snapshot, weather_snapshot,
+            biological_class=biological_class,
+            days_since_last_chemical_application=days_since_chemical,
+        )
         st.session_state.report = report
 
         with st.spinner("Generating farmer advisory..."):
@@ -160,6 +191,36 @@ else:
         st.metric("Rain Risk (application washout)", "Yes" if readiness.get("rain_risk_flag") else "No")
 
     st.divider()
+
+    bio_guidance = report.get("biological_guidance")
+    if bio_guidance:
+        st.subheader(f"🧬 Biological Product Guidance: {bio_guidance['label']}")
+
+        bg_col1, bg_col2, bg_col3 = st.columns(3)
+        with bg_col1:
+            st.metric("Product Viability Score", f"{bio_guidance['viability_score']}/100"
+                       if bio_guidance['viability_score'] is not None else "N/A")
+
+        with bg_col2:
+            compat = bio_guidance["compatibility"]
+            if compat["risk"] is True:
+                st.error("⚠️ Chemical compatibility risk")
+            elif compat["risk"] is False:
+                st.success("✅ No compatibility risk")
+            else:
+                st.warning("❔ Compatibility unknown")
+            st.caption(compat["reason"])
+
+        with bg_col3:
+            if bio_guidance["timing_guidance"]:
+                st.info(bio_guidance["timing_guidance"])
+            else:
+                st.caption("No special timing requirement for this product class.")
+
+        st.caption(f"**Notes:** {bio_guidance['notes']}")
+        st.caption(f"**Source:** {bio_guidance['source']}")
+
+        st.divider()
 
     st.subheader("Indicator Breakdown")
     comp_col1, comp_col2, comp_col3 = st.columns(3)
