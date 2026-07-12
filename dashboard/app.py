@@ -49,7 +49,7 @@ from gee_ingest import get_field_snapshot
 from weather_ingest import get_weather_snapshot
 from readiness_engine import build_field_report
 from gemini_advisory import generate_advisory
-from telegram_delivery import send_field_alert
+from telegram_delivery import send_field_alert, format_alert_message
 
 
 st.set_page_config(page_title="BioSetu - Field Readiness Dashboard", page_icon="🌾", layout="wide")
@@ -169,13 +169,16 @@ if run_button:
 
         save_to_history(report)
 
+        telegram_status = None
         if send_telegram:
             with st.spinner("Sending Telegram alert..."):
                 result = send_field_alert(report, advisory)
+                telegram_status = result
                 if result["success"]:
                     st.success("Telegram alert sent.")
                 else:
                     st.warning(f"Telegram delivery failed: {result['error']}")
+        st.session_state.telegram_status = telegram_status
 
 
 report = st.session_state.report
@@ -266,6 +269,52 @@ else:
         st.subheader(f"Farmer Advisory ({advisory['language']})")
         st.info(advisory["message"])
         st.caption(f"Generated via: {advisory['source']}")
+
+        st.divider()
+
+        st.subheader("📱 Telegram Alert Preview")
+        st.caption(
+            "This is exactly what gets sent to the farmer's Telegram bot when an alert "
+            "fires — shown here directly since the actual delivery goes to a private "
+            "chat that isn't visible during remote/online screening."
+        )
+
+        telegram_message = format_alert_message(report, advisory)
+        # Render as a Telegram-style chat bubble so it's visually self-evident
+        # this is a delivered alert, not just raw text.
+        bubble_html = f"""
+        <div style="max-width: 480px; background-color: #efeae2; border-radius: 12px;
+                    padding: 16px; font-family: -apple-system, Roboto, sans-serif;">
+            <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                <div style="width: 32px; height: 32px; border-radius: 50%;
+                            background: linear-gradient(135deg, #4facfe, #00f2fe);
+                            display: flex; align-items: center; justify-content: center;
+                            color: white; font-weight: bold; margin-right: 8px;">B</div>
+                <div>
+                    <div style="font-weight: 600; font-size: 14px; color: #1a1a1a;">BioSetu Alerts</div>
+                    <div style="font-size: 11px; color: #667781;">bot</div>
+                </div>
+            </div>
+            <div style="background-color: white; border-radius: 8px; padding: 10px 12px;
+                        font-size: 13.5px; color: #1a1a1a; line-height: 1.5;
+                        white-space: pre-wrap; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+                {telegram_message.replace(chr(10), '<br>')}
+            </div>
+        </div>
+        """
+        st.markdown(bubble_html, unsafe_allow_html=True)
+
+        telegram_status = st.session_state.get("telegram_status")
+        if telegram_status is not None:
+            if telegram_status.get("success"):
+                st.success("✅ This exact message was delivered live to the BioSetu Telegram bot during this session.")
+            else:
+                st.warning(f"⚠️ Live delivery was attempted but failed: {telegram_status.get('error')}")
+        else:
+            st.caption(
+                "Check 'Also send to Telegram' in the sidebar and re-fetch to trigger "
+                "a real, live delivery to the bot in addition to this preview."
+            )
 
     st.divider()
 
