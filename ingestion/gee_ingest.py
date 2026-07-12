@@ -17,20 +17,41 @@ or in a Colab notebook where GEE auth is already set up.
 """
 
 import ee
+import os
+import json
 import datetime
 
 
 def init_earth_engine(project_id: str):
     """
     Initialize the Earth Engine session.
-    project_id: your GEE-linked Google Cloud project ID (required for
-    the current API — find it in the GEE Code Editor under your account).
+
+    Supports two auth modes:
+    1. Local/interactive: uses your personal `earthengine authenticate`
+       credentials (default, used when running locally).
+    2. Service account (for cloud deployment, e.g. Streamlit Cloud):
+       if the environment variables GEE_SERVICE_ACCOUNT_EMAIL and
+       GEE_SERVICE_ACCOUNT_KEY (the full JSON key content as a string)
+       are set, those are used instead - no interactive login needed.
+
+    project_id: your GEE-linked Google Cloud project ID.
     """
-    try:
-        ee.Initialize(project=project_id)
-    except Exception:
-        ee.Authenticate()
-        ee.Initialize(project=project_id)
+    service_account_email = os.environ.get("GEE_SERVICE_ACCOUNT_EMAIL")
+    service_account_key = os.environ.get("GEE_SERVICE_ACCOUNT_KEY")
+
+    if service_account_email and service_account_key:
+        # Cloud/service-account auth path - no browser interaction needed.
+        credentials = ee.ServiceAccountCredentials(
+            service_account_email, key_data=service_account_key
+        )
+        ee.Initialize(credentials, project=project_id)
+    else:
+        # Local/interactive auth path (original behavior).
+        try:
+            ee.Initialize(project=project_id)
+        except Exception:
+            ee.Authenticate()
+            ee.Initialize(project=project_id)
 
 
 def get_field_geometry(lat: float, lon: float, buffer_m: int = 1000):
@@ -178,5 +199,5 @@ def get_field_snapshot(lat: float, lon: float, project_id: str):
 if __name__ == "__main__":
     # Example: Pauri Garhwal, Uttarakhand coordinates
     PROJECT_ID = "htip-bah2026"  # your GEE project ID
-    snapshot = get_field_snapshot(lat=30.15, lon=78.78, project_id="htip-bah2026")
+    snapshot = get_field_snapshot(lat=30.15, lon=78.78, project_id=PROJECT_ID)
     print(snapshot)
