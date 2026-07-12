@@ -10,12 +10,19 @@ Docs: https://open-meteo.com/en/docs
 
 import requests
 import datetime
+import time
 
 
-def get_weather_forecast(lat: float, lon: float, forecast_days: int = 3):
+def get_weather_forecast(lat: float, lon: float, forecast_days: int = 3,
+                          max_retries: int = 3, timeout: int = 25):
     """
     Returns hourly forecast for rainfall, temperature, and humidity
     for the next `forecast_days`.
+
+    Retries up to `max_retries` times with a short backoff if the
+    request times out or fails transiently — Open-Meteo occasionally
+    takes longer than a short timeout allows under load, and a single
+    slow response shouldn't surface as a hard failure to the user.
     """
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -27,9 +34,21 @@ def get_weather_forecast(lat: float, lon: float, forecast_days: int = 3):
         "timezone": "auto",
     }
 
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json()
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(2 * attempt)  # simple backoff: 2s, 4s, ...
+            continue
+
+    # All retries exhausted - raise the last error so the caller can
+    # still handle it (e.g. show "insufficient forecast data" gracefully).
+    raise last_error
 
 
 def summarize_forecast_risk(forecast_json: dict):
