@@ -76,25 +76,43 @@ def generate_advisory(field_report: dict, language: str = "Hindi", api_key: str 
     Falls back to a safe, honest, English rule-based message if the
     Gemini call fails for any reason (never leave the farmer with
     nothing — reliability matters more than polish here).
-    """
-    try:
-        client = get_gemini_client(api_key)
-        prompt = build_prompt(field_report, language)
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
-        message = response.text.strip()
-        source = f"gemini ({model_name})"
-    except Exception as e:
-        message = _fallback_message(field_report)
-        source = f"fallback_rule_based (gemini_error: {e})"
 
+    Retries once automatically on a transient overload (503) error,
+    since Gemini's "high demand" responses are usually momentary.
+    """
+    import time
+
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+    last_error = None
+
+    for attempt in range(2):  # try once, retry once on transient overload
+        try:
+            client = get_gemini_client(api_key)
+            prompt = build_prompt(field_report, language)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            message = response.text.strip()
+            return {
+                "message": message,
+                "language": language,  # accurate - this IS the requested language
+                "source": f"gemini ({model_name})",
+            }
+        except Exception as e:
+            last_error = e
+            if attempt == 0 and "503" in str(e):
+                time.sleep(3)
+                continue
+            break
+
+    # All attempts failed - use the honest English fallback, and label
+    # it accurately as English regardless of what language was requested,
+    # since the fallback message is hardcoded English, not translated.
     return {
-        "message": message,
-        "language": language,
-        "source": source,
+        "message": _fallback_message(field_report),
+        "language": "English (fallback - Gemini unavailable)",
+        "source": f"fallback_rule_based (gemini_error: {last_error})",
     }
 
 
