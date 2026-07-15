@@ -21,6 +21,8 @@ import json
 import datetime
 
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
 
 # Streamlit Cloud secrets (st.secrets) are NOT automatically available
 # as os.environ variables to the rest of the codebase. Since all our
@@ -45,11 +47,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "scoring"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "advisory"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "delivery"))
 
-from gee_ingest import get_field_snapshot
+from gee_ingest import get_field_snapshot, get_ndvi_thumbnail_url, init_earth_engine, get_field_geometry
 from weather_ingest import get_weather_snapshot
 from readiness_engine import build_field_report
 from gemini_advisory import generate_advisory
 from telegram_delivery import send_field_alert, format_alert_message
+from geocoding import search_location
 
 
 st.set_page_config(page_title="BioSetu - Field Readiness Dashboard", page_icon="🌾", layout="wide")
@@ -84,8 +87,37 @@ def save_to_history(report):
 st.sidebar.title("🌾 BioSetu")
 st.sidebar.caption("Sky-to-Soil Bridge — HACK CORE 2026")
 
-lat = st.sidebar.number_input("Latitude", value=30.15, format="%.4f")
-lon = st.sidebar.number_input("Longitude", value=78.78, format="%.4f")
+if "lat_value" not in st.session_state:
+    st.session_state.lat_value = 30.15
+if "lon_value" not in st.session_state:
+    st.session_state.lon_value = 78.78
+if "search_results" not in st.session_state:
+    st.session_state.search_results = []
+
+st.sidebar.subheader("📍 Find a Location")
+search_query = st.sidebar.text_input("Search by place name", placeholder="e.g. Pauri Garhwal")
+if st.sidebar.button("Search"):
+    with st.spinner("Searching..."):
+        st.session_state.search_results = search_location(search_query)
+    if not st.session_state.search_results:
+        st.sidebar.warning("No matches found — try a different spelling or a nearby larger town.")
+
+if st.session_state.search_results:
+    labels = [r["label"] for r in st.session_state.search_results]
+    chosen_label = st.sidebar.selectbox("Select a match", labels)
+    if st.sidebar.button("Use this location"):
+        chosen = next(r for r in st.session_state.search_results if r["label"] == chosen_label)
+        st.session_state.lat_value = chosen["lat"]
+        st.session_state.lon_value = chosen["lon"]
+        st.session_state.search_results = []
+        st.rerun()
+
+st.sidebar.caption("Or enter coordinates manually:")
+lat = st.sidebar.number_input("Latitude", value=st.session_state.lat_value, format="%.4f", key="lat_input")
+lon = st.sidebar.number_input("Longitude", value=st.session_state.lon_value, format="%.4f", key="lon_input")
+st.session_state.lat_value = lat
+st.session_state.lon_value = lon
+
 project_id = st.sidebar.text_input("GEE Project ID", value=os.environ.get("GEE_PROJECT_ID", ""))
 language = st.sidebar.selectbox("Advisory language", ["Hindi", "English", "Marathi", "Tamil", "Telugu"])
 
@@ -152,7 +184,11 @@ if run_button:
         try:
             weather_snapshot = get_weather_snapshot(lat=lat, lon=lon)
         except Exception as e:
-            st.error(f"Weather fetch failed: {e}")
+            st.warning(
+                "Weather forecast temporarily unavailable (Open-Meteo did not respond "
+                "in time after 3 attempts). Readiness score will use satellite data only; "
+                "early warning will show as UNKNOWN until forecast data is available."
+            )
             weather_snapshot = None
 
     if satellite_snapshot is not None:
@@ -162,6 +198,14 @@ if run_button:
             days_since_last_chemical_application=days_since_chemical,
         )
         st.session_state.report = report
+
+        with st.spinner("Rendering satellite map overlay..."):
+            try:
+                init_earth_engine(project_id)
+                geometry = get_field_geometry(lat, lon)
+                st.session_state.ndvi_thumb_url = get_ndvi_thumbnail_url(geometry)
+            except Exception:
+                st.session_state.ndvi_thumb_url = None
 
         with st.spinner("Generating farmer advisory..."):
             advisory = generate_advisory(report, language=language)
@@ -213,6 +257,84 @@ else:
 
     st.divider()
 
+    # -----------------------------------------------------------
+    # Confidence & Data Quality panel
+    # -----------------------------------------------------------
+    st.subheader("🔎 Confidence & Data Quality")
+    dq = report["raw_satellite"].get("data_quality", {})
+    dq_col1, dq_col2, dq_col3, dq_col4 = st.columns(4)
+
+    with dq_col1:
+        st.metric("Prediction Confidence", f"{readiness['confidence']}%")
+
+    with dq_col2:
+        cloud_pct = dq.get("cloud_pct")
+        if cloud_pct is not None:
+            st.metric("Cloud Contamination", f"{round(cloud_pct, 1)}%")
+        else:
+            st.metric("Cloud Contamination", "N/A")
+
+    with dq_col3:
+        last_pass = dq.get("last_satellite_pass_date")
+        if last_pass:
+            days_ago = (datetime.date.today() - datetime.date.fromisoformat(last_pass)).days
+            st.metric("Last Satellite Pass", f"{days_ago}d ago" if days_ago > 0 else "Today")
+        else:
+            st.metric("Last Satellite Pass", "N/A")
+
+    with dq_col4:
+        weather_ok = report.get("raw_weather") is not None
+        st.metric("Weather Forecast", "✔ Available" if weather_ok else "✖ Unavailable")
+
+    if dq.get("ndvi_window_days_used") and dq.get("ndvi_window_days_used") > 14:
+        st.caption(
+            f"⚠️ Vegetation data is from a {dq['ndvi_window_days_used']}-day lookback window "
+            f"(recent cloud cover prevented a fresher image) — treat NDVI as a lagging indicator this cycle."
+        )
+
+    st.divider()
+
+    # -----------------------------------------------------------
+    # Interactive satellite map
+    # -----------------------------------------------------------
+    st.subheader("🗺️ Field Location Map")
+    map_col1, map_col2 = st.columns([2, 1])
+
+    with map_col1:
+        field_map = folium.Map(location=[lat, lon], zoom_start=12, tiles="OpenStreetMap")
+        folium.Marker(
+            [lat, lon],
+            popup=f"Readiness: {readiness['score']}/100<br>Warning: {warning['level']}",
+            icon=folium.Icon(color="green" if warning["level"] == "NONE" else "orange", icon="leaf"),
+        ).add_to(field_map)
+
+        ndvi_thumb_url = st.session_state.get("ndvi_thumb_url")
+        if ndvi_thumb_url:
+            try:
+                buffer_deg = 0.015  # roughly matches the 1.5km thumbnail region
+                folium.raster_layers.ImageOverlay(
+                    image=ndvi_thumb_url,
+                    bounds=[[lat - buffer_deg, lon - buffer_deg], [lat + buffer_deg, lon + buffer_deg]],
+                    opacity=0.6,
+                    name="NDVI",
+                ).add_to(field_map)
+                folium.LayerControl().add_to(field_map)
+            except Exception:
+                pass
+
+        st_folium(field_map, width=None, height=380, key="field_map")
+
+    with map_col2:
+        st.caption(
+            "Green marker = no active stress warning. Orange = an early warning "
+            "is active. NDVI overlay (if visible) shows a real Sentinel-2-derived "
+            "vegetation map for this field, not an illustration."
+        )
+        if ndvi_thumb_url:
+            st.caption("🟩 Dark green = healthy vegetation · 🟥 Red = sparse/stressed vegetation")
+
+    st.divider()
+
     bio_guidance = report.get("biological_guidance")
     if bio_guidance:
         st.subheader(f"🧬 Biological Product Guidance: {bio_guidance['label']}")
@@ -240,6 +362,51 @@ else:
 
         st.caption(f"**Notes:** {bio_guidance['notes']}")
         st.caption(f"**Source:** {bio_guidance['source']}")
+
+        st.divider()
+
+    # -----------------------------------------------------------
+    # Scientific Explainability Panel
+    # -----------------------------------------------------------
+    explain = report.get("explainability")
+    if explain:
+        st.subheader("🔬 Scientific Explainability Panel")
+        st.write(f"**Readiness Score: {explain['score']}/100**")
+        st.caption("Why?")
+
+        for factor in explain["factors"]:
+            icon = "✅" if factor["positive"] else "⚠️"
+            sign = "+" if factor["contribution"] >= 0 else ""
+            st.write(f"{icon} {factor['label']}: **{sign}{factor['contribution']}**")
+
+        st.info(f"**Recommendation:** {explain['recommendation']}")
+        st.caption(
+            "This breakdown decomposes the same readiness score shown above into "
+            "per-factor contributions — it is not a separate or different model."
+        )
+
+        st.divider()
+
+    # -----------------------------------------------------------
+    # Risk Timeline Today
+    # -----------------------------------------------------------
+    risk_timeline = report.get("risk_timeline")
+    if risk_timeline:
+        st.subheader("📊 Risk Timeline — Today")
+
+        def render_bar(label, bars, max_bars=5):
+            filled = "🟩" * bars + "⬜" * (max_bars - bars)
+            st.write(f"**{label}**  {filled}")
+
+        rt_col1, rt_col2 = st.columns(2)
+        with rt_col1:
+            render_bar("Rain Risk", risk_timeline["rain_risk_bars"])
+            render_bar("Moisture", risk_timeline["moisture_bars"])
+        with rt_col2:
+            render_bar("Heat Stress", risk_timeline["heat_stress_bars"])
+            render_bar("Disease Risk", risk_timeline["disease_risk_bars"])
+
+        st.caption(f"⚠️ Disease Risk: {risk_timeline['disease_risk_disclaimer']}")
 
         st.divider()
 

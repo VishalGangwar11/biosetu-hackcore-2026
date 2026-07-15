@@ -417,6 +417,128 @@ def classify_early_warning(max_precipitation_mm, max_temperature_c,
     return {"level": "NONE", "reason": "No significant stress signals detected."}
 
 
+def build_explainability_breakdown(readiness: dict, weather_snapshot: dict, biological_guidance: dict = None):
+    """
+    Converts the readiness score into a point-contribution breakdown
+    for the "Scientific Explainability Panel" - shows which factors
+    pushed the score up or down and by roughly how much, plus a plain
+    recommendation on WHEN to apply.
+
+    This is a presentational decomposition of the same underlying
+    component scores already computed in compute_readiness_score -
+    it does not introduce a new/different scoring model, just makes
+    the existing one legible at a glance.
+    """
+    components = readiness.get("components", {})
+    factors = []
+
+    # Each component's score (0-100) is converted to a signed
+    # contribution around a neutral midpoint (50), scaled down so the
+    # sum of contributions is proportionate to a 0-100 readiness range.
+    weight_map = {
+        "soil_moisture": ("Soil Moisture", 0.35),
+        "ndvi": ("Vegetation Health", 0.30),
+        "temperature": ("Temperature", 0.25),
+    }
+
+    for key, (label, weight) in weight_map.items():
+        score = components.get(key)
+        if score is None:
+            continue
+        contribution = round((score - 50) * weight, 0)
+        factors.append({
+            "label": label,
+            "contribution": int(contribution),
+            "positive": contribution >= 0,
+        })
+
+    # Rain forecast penalty (already reflected in the capped score,
+    # shown here separately for transparency)
+    if readiness.get("rain_risk_flag"):
+        factors.append({"label": "Rain Forecast", "contribution": -10, "positive": False})
+
+    # Chemical compatibility penalty, if a biological class was selected
+    if biological_guidance:
+        compat = biological_guidance.get("compatibility", {})
+        if compat.get("risk") is True:
+            factors.append({"label": "Chemical Residue Risk", "contribution": -7, "positive": False})
+
+    # Recommendation timing - simple, explainable rule, not a separate model
+    score = readiness.get("score")
+    if score is None:
+        recommendation = "Insufficient data for a timing recommendation."
+    elif readiness.get("rain_risk_flag"):
+        recommendation = "Apply within next 24 hours, before forecast rain arrives."
+    elif score >= 70:
+        recommendation = "Apply within 24 hours — conditions currently favorable."
+    elif score >= 40:
+        recommendation = "Marginal conditions — consider waiting 24-48h if possible."
+    else:
+        recommendation = "Hold application — conditions not currently favorable."
+
+    return {
+        "score": score,
+        "factors": factors,
+        "recommendation": recommendation,
+    }
+
+
+def build_risk_timeline(readiness: dict, weather_snapshot: dict):
+    """
+    Builds a simple 0-5 bar-style risk indicator for four dimensions,
+    for the "Risk Timeline Today" panel.
+
+    IMPORTANT HONESTY NOTE: "Disease Risk" here is an illustrative
+    heuristic (high humidity + moderate temperature broadly favor many
+    fungal pathogens), NOT a validated, crop-specific disease
+    prediction model. No disease-specific epidemiological model exists
+    in this pipeline. This is clearly labeled as illustrative in the
+    dashboard - do not present it as a calibrated prediction.
+    """
+    weather_snapshot = weather_snapshot or {}
+    max_precip = weather_snapshot.get("max_precipitation_mm")
+    max_temp = weather_snapshot.get("max_temperature_c")
+    humidity = weather_snapshot.get("avg_humidity_pct")
+
+    def to_bars(value, thresholds):
+        """Converts a value into a 0-5 bar count given ascending thresholds."""
+        if value is None:
+            return 0
+        bars = 0
+        for t in thresholds:
+            if value >= t:
+                bars += 1
+        return min(bars, 5)
+
+    rain_bars = to_bars(max_precip, [2, 5, 10, 20, 30])
+    heat_bars = to_bars(max_temp, [28, 31, 34, 37, 40])
+
+    moisture_score = readiness.get("components", {}).get("soil_moisture")
+    moisture_bars = to_bars(moisture_score, [20, 40, 60, 80, 95]) if moisture_score is not None else 0
+
+    disease_bars = 0
+    if humidity is not None and max_temp is not None:
+        if humidity > 80 and 20 <= max_temp <= 32:
+            disease_bars = 4
+        elif humidity > 70 and 18 <= max_temp <= 34:
+            disease_bars = 3
+        elif humidity > 60:
+            disease_bars = 2
+        else:
+            disease_bars = 1
+
+    return {
+        "rain_risk_bars": rain_bars,
+        "heat_stress_bars": heat_bars,
+        "moisture_bars": moisture_bars,
+        "disease_risk_bars": disease_bars,
+        "disease_risk_disclaimer": (
+            "Illustrative heuristic based on humidity/temperature only — "
+            "not a validated, crop-specific disease prediction model."
+        ),
+    }
+
+
 def build_field_report(satellite_snapshot: dict, weather_snapshot: dict,
                         biological_class: str = None,
                         days_since_last_chemical_application: int = None):
@@ -450,11 +572,16 @@ def build_field_report(satellite_snapshot: dict, weather_snapshot: dict,
         days_since_last_chemical_application=days_since_last_chemical_application,
     )
 
+    explainability = build_explainability_breakdown(readiness, weather_snapshot, biological_guidance)
+    risk_timeline = build_risk_timeline(readiness, weather_snapshot)
+
     return {
         "location": {"lat": satellite_snapshot.get("lat"), "lon": satellite_snapshot.get("lon")},
         "readiness": readiness,
         "early_warning": warning,
         "biological_guidance": biological_guidance,
+        "explainability": explainability,
+        "risk_timeline": risk_timeline,
         "raw_satellite": satellite_snapshot,
         "raw_weather": weather_snapshot,
     }
