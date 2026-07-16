@@ -26,5 +26,26 @@
     "lon": 78.78,
     "score": 96.1,
     "warning_level": "NONE"
+  },
+  {
+    "timestamp": "2026-07-16T01:06:19.762827",
+    "lat": 28.92134,
+    "lon": 79.97075,
+    "score": 50.8,
+    "warning_level": "HIGH"
+  },
+  {
+    "timestamp": "2026-07-16T01:13:09.672063",
+    "lat": 28.92134,
+    "lon": 79.97075,
+    "score": 50.8,
+    "warning_level": "HIGH"
+  },
+  {
+    "timestamp": "2026-07-16T01:16:46.557578",
+    "lat": 30.15286,
+    "lon": 78.7771,
+    "score": 93.7,
+    "warning_level": "NONE"
   }
 ]

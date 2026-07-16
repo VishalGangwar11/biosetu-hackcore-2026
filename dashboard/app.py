@@ -81,16 +81,33 @@ def save_to_history(report):
         json.dump(history, f, indent=2)
 
 
+FEEDBACK_FILE = os.path.join(os.path.dirname(__file__), "field_feedback.json")
+
+
+def load_feedback():
+    if os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def save_feedback(entry):
+    feedback = load_feedback()
+    feedback.append(entry)
+    with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
+        json.dump(feedback, f, indent=2)
+
+
 # ---------------------------------------------------------------
 # Sidebar - field configuration
 # ---------------------------------------------------------------
 st.sidebar.title("🌾 BioSetu")
 st.sidebar.caption("Sky-to-Soil Bridge — HACK CORE 2026")
 
-if "lat_value" not in st.session_state:
-    st.session_state.lat_value = 30.15
-if "lon_value" not in st.session_state:
-    st.session_state.lon_value = 78.78
+if "lat_input" not in st.session_state:
+    st.session_state.lat_input = 30.15
+if "lon_input" not in st.session_state:
+    st.session_state.lon_input = 78.78
 if "search_results" not in st.session_state:
     st.session_state.search_results = []
 
@@ -107,16 +124,19 @@ if st.session_state.search_results:
     chosen_label = st.sidebar.selectbox("Select a match", labels)
     if st.sidebar.button("Use this location"):
         chosen = next(r for r in st.session_state.search_results if r["label"] == chosen_label)
-        st.session_state.lat_value = chosen["lat"]
-        st.session_state.lon_value = chosen["lon"]
+        # Update the ACTUAL widget keys directly - Streamlit ignores a
+        # number_input's `value=` argument on reruns once that widget's
+        # key already has stored state, so this must set st.session_state
+        # under the exact same keys the widgets below use ("lat_input" /
+        # "lon_input"), not a separate shadow variable.
+        st.session_state.lat_input = chosen["lat"]
+        st.session_state.lon_input = chosen["lon"]
         st.session_state.search_results = []
         st.rerun()
 
 st.sidebar.caption("Or enter coordinates manually:")
-lat = st.sidebar.number_input("Latitude", value=st.session_state.lat_value, format="%.4f", key="lat_input")
-lon = st.sidebar.number_input("Longitude", value=st.session_state.lon_value, format="%.4f", key="lon_input")
-st.session_state.lat_value = lat
-st.session_state.lon_value = lon
+lat = st.sidebar.number_input("Latitude", format="%.4f", key="lat_input")
+lon = st.sidebar.number_input("Longitude", format="%.4f", key="lon_input")
 
 project_id = st.sidebar.text_input("GEE Project ID", value=os.environ.get("GEE_PROJECT_ID", ""))
 language = st.sidebar.selectbox("Advisory language", ["Hindi", "English", "Marathi", "Tamil", "Telugu"])
@@ -482,6 +502,74 @@ else:
                 "Check 'Also send to Telegram' in the sidebar and re-fetch to trigger "
                 "a real, live delivery to the bot in addition to this preview."
             )
+
+    st.divider()
+
+    # -----------------------------------------------------------
+    # Field Outcome Feedback (PS-05 "Season Journal" concept)
+    # -----------------------------------------------------------
+    st.subheader("🌱 Field Outcome Feedback")
+    st.caption(
+        "This closes the feedback loop described in PS-05/PS-06/PS-07 — "
+        "capturing what actually happened in the field so future "
+        "recommendations can be validated against real outcomes. "
+        "Stored locally for this hackathon demo; a production version "
+        "would aggregate this across many farmers into a shared dataset."
+    )
+
+    applied = st.radio(
+        "Did you apply the recommended biological product?",
+        ["Not yet answered", "Yes", "No"],
+        index=0,
+        key="feedback_applied",
+    )
+
+    if applied == "Yes":
+        fb_col1, fb_col2 = st.columns(2)
+        with fb_col1:
+            date_applied = st.date_input("Date Applied", value=datetime.date.today())
+            crop_condition = st.selectbox("Crop Condition", ["Healthy", "Average", "Poor"])
+        with fb_col2:
+            uploaded_image = st.file_uploader("Upload Field Image (Optional)", type=["jpg", "jpeg", "png"])
+            helpfulness = st.slider("Recommendation Helpfulness (1-5)", min_value=1, max_value=5, value=3)
+
+        remarks = st.text_area("Remarks", placeholder="Anything worth noting about this application...")
+
+        if st.button("Submit Feedback"):
+            feedback_entry = {
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "location": {"lat": lat, "lon": lon},
+                "readiness_score_at_recommendation": readiness.get("score"),
+                "biological_class": biological_class,
+                "applied": True,
+                "date_applied": str(date_applied),
+                "crop_condition": crop_condition,
+                "helpfulness_rating": helpfulness,
+                "remarks": remarks,
+                "image_uploaded": uploaded_image is not None,
+                "image_filename": uploaded_image.name if uploaded_image else None,
+            }
+            save_feedback(feedback_entry)
+            st.success("Thank you — this feedback has been recorded and will inform future scoring calibration.")
+
+    elif applied == "No":
+        no_reason = st.text_area("Why not? (Optional)", placeholder="e.g. weather changed, product unavailable...")
+        if st.button("Submit Feedback"):
+            feedback_entry = {
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "location": {"lat": lat, "lon": lon},
+                "readiness_score_at_recommendation": readiness.get("score"),
+                "biological_class": biological_class,
+                "applied": False,
+                "reason_not_applied": no_reason,
+            }
+            save_feedback(feedback_entry)
+            st.success("Thank you — this feedback has been recorded.")
+
+    feedback_history = load_feedback()
+    if feedback_history:
+        with st.expander(f"📋 View all recorded feedback ({len(feedback_history)} entries)"):
+            st.dataframe(feedback_history, use_container_width=True)
 
     st.divider()
 
