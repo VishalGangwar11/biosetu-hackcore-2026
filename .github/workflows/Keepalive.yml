@@ -25,4 +25,4 @@ jobs:
           playwright install chromium --with-deps
 
       - name: Run keepalive script
-        run: python scripts/keepalive.py
+       run: python .github/workflows/scripts/keepalive.py
