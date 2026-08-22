@@ -50,13 +50,7 @@ pip install -r requirements.txt
 earthengine authenticate   # one-time, opens browser
 ```
 
-Set environment variables (create a `.env` file, never commit it):
-```
-GEE_PROJECT_ID=your-project-id
-GEMINI_API_KEY=your-key
-TELEGRAM_BOT_TOKEN=your-token
-TELEGRAM_CHAT_ID=your-chat-id
-```
+
 
 ## Team
 
