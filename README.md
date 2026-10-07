@@ -55,4 +55,3 @@ earthengine authenticate   # one-time, opens browser
 ## Team
 
 - Vishal Gangwar — Project Lead, AI Systems, Pipeline Architecture
-- Mohit Singh Bohra — Data Engineering, Model Integration
